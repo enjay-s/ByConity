@@ -1,5 +1,5 @@
 #include "TableFunctions/TableFunctionCloudHive.h"
-#if USE_HIVE
+#ifdef USE_HIVE
 
 #include <Disks/DiskLocal.h>
 #include <Interpreters/StorageID.h>

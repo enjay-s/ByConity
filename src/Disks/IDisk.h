@@ -41,6 +41,8 @@
 #include <filesystem>
 #include "Poco/Util/AbstractConfiguration.h"
 
+#define USE_CLOUDFS false
+
 namespace fs = std::filesystem;
 
 namespace CurrentMetrics
