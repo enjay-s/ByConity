@@ -182,6 +182,11 @@ SettingsChanges getSettingsChangesFromConfigs(PlainConfigsPtr configs)
         {"aws_glue_use_instance_profile", "aws_glue_use_instance_profile"},
         {"s3_use_virtual_hosted_style", "s3_use_virtual_hosted_style"},
         {"s3_use_virtual_hosted_style", "s3.use_virtual_hosted_style"},
+        {"hive_metastore_client_kerberos_auth","hive_metastore_client_kerberos_auth"},
+        {"hive_metastore_client_service_fqdn","hive_metastore_client_service_fqdn"},
+        {"hive_metastore_client_keytab_path","hive_metastore_client_keytab_path"},
+        {"hive_metastore_client_principal","hive_metastore_client_principal"},
+        {"hive_metastore_client_service_name","hive_metastore_client_service_name"},
     };
 
     SettingsChanges changes;

@@ -60,6 +60,8 @@ struct Settings;
     M(String, hive_metastore_client_service_fqdn, "", "The fqdn for auth server", 0) \
     M(String, hive_metastore_client_keytab_path, "/etc/krb5.keytab", "The path of Kerberos keytab for hms auth", 0) \
     M(String, hive_metastore_client_principal, "hive", "The Kerberos principal for hms auth", 0) \
+    M(Bool, hive_metastore_client_auth_beike, true, "The Kerberos principal for hms auth beike", 0) \
+    M(String, hive_metastore_client_service_name, "", "", 0) \
     /** S3 settings **/ \
     M(String, s3_extra_options, "", "S3 extra options, delimited by ','", 0) \
     M(String, meta_type, "hive", "hive for hive, lf for lasformation, glue for aws glue", 0) \
