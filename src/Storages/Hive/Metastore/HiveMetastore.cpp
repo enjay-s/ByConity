@@ -1,7 +1,9 @@
 #include <functional>
 #include <numeric>
 #include <sstream>
+
 #include <Storages/Hive/Metastore/HiveMetastore.h>
+#include <boost/fiber/algo/algorithm.hpp>
 #include <fmt/format.h>
 #include <Common/Exception.h>
 #if USE_HIVE
@@ -18,6 +20,9 @@
 #include <random>
 #include <Parsers/formatTenantDatabaseName.h>
 #include <Storages/Hive/Metastore/MetastoreConvertUtils.h>
+#include <Storages/Hive/BeikeTSaslClientTransport.h>
+
+#include <boost/algorithm/string.hpp>
 namespace DB
 {
 namespace ErrorCodes
@@ -33,7 +38,7 @@ static const UInt64 get_hive_metastore_client_timeout = 1000000;
 static const int hive_metastore_client_conn_timeout_ms = 10000;
 static const int hive_metastore_client_recv_timeout_ms = 10000;
 static const int hive_metastore_client_send_timeout_ms = 10000;
-
+using namespace std;
 ThriftHiveMetastoreClientPool::ThriftHiveMetastoreClientPool(ThriftHiveMetastoreClientBuilder builder_)
     : PoolBase<Object>(max_hive_metastore_client_connections, getLogger("ThriftHiveMetastoreClientPool")), builder(builder_)
 {
@@ -250,6 +255,96 @@ HiveMetastoreClientPtr HiveMetastoreClientFactory::getOrCreate(const String & na
     return it->second;
 }
 
+
+static int SaslLogCallback(void* context, int level, const char* message) {
+    if (message == nullptr) return SASL_BADPARAM;
+    const char* authctx = (context == nullptr) ? "Unknown" :
+        reinterpret_cast<const char*>(context);
+
+    switch (level) {
+        case SASL_LOG_NONE:  // "Don't log anything"
+        case SASL_LOG_PASS:  // "Traces... including passwords" - don't log!
+          break;
+        case SASL_LOG_ERR: // "Unusual errors"
+        case SASL_LOG_FAIL: // "Authentication failures"
+            LOG(ERROR) << "SASL message (" << authctx << "): " << message;
+            break;
+        case SASL_LOG_WARN: // "Non-fatal warnings"
+            LOG(WARNING) << "SASL message (" << authctx << "): " << message;
+            break;
+        case SASL_LOG_NOTE: // "More verbose than WARN"
+            LOG(INFO) << "SASL message (" << authctx << "): " << message;
+            break;
+        case SASL_LOG_DEBUG: // "More verbose than NOTE"
+            LOG(DEBUG) << "SASL message (" << authctx << "): " << message;
+            break;
+        case SASL_LOG_TRACE: // "Traces of internal protocols"
+        default:
+            LOG(TRACE) << "SASL message (" << authctx << "): " << message;
+            break;
+    }
+
+    return SASL_OK;
+}
+
+
+using boost::algorithm::is_any_of;
+using boost::algorithm::split;
+using boost::algorithm::trim;
+
+int SaslAuthorizeInternal(sasl_conn_t* /*conn*/, void* /*context*/,
+    const char* requested_user, unsigned rlen,
+    const char* /*auth_identity*/, unsigned /*alen*/,
+    const char* /*def_realm*/, unsigned /*urlen*/,
+    struct propctx* /*propctx*/) {
+    string requested_principal(requested_user, rlen);
+    vector<string> names;
+
+    split(names, requested_principal, is_any_of("/@"));
+
+    if (names.size() != 3) {
+        LOG(INFO) << "Kerberos principal should be of the form: "
+                  << "<service>/<hostname>@<realm> - got: " << requested_user;
+        return SASL_BADAUTH;
+    }
+   /* SecureAuthProvider* internal_auth_provider;
+    if (context == NULL) {
+        internal_auth_provider = static_cast<SecureAuthProvider*>(
+            AuthManager::GetInstance()->GetInternalAuthProvider());
+    } else {
+        // Branch should only be taken for testing, where context is used to inject an auth
+        // provider.
+        internal_auth_provider = static_cast<SecureAuthProvider*>(context);
+    }*/
+
+    vector<string> whitelist;
+    split(whitelist,"hdfs,bigdata" , is_any_of(","));
+    //whitelist.push_back(internal_auth_provider->service_name());
+    for (string& s: whitelist) {
+        trim(s);
+        if (s.empty()) continue;
+        if (names[0] == s) {
+            // We say "principal" here becase this is for internal communication, and hence
+            // ought always be --principal or --be_principal
+            LOG(INFO) << "Successfully authenticated principal \"" << requested_principal
+                    << "\" on an internal connection";
+            return SASL_OK;
+        }
+    }
+    LOG(INFO) << "Principal \"" << requested_principal << "\" not authenticated. "
+              << "Reason: 'service' does not match from <service>/<hostname>@<realm>.\n";
+    return SASL_BADAUTH;
+}
+
+
+void SetMaxMessageSize(TTransport* transport) {
+    static int message_size = 1024 * 1024 * 1024;
+    // TODO: Find way to assign TConfiguration through TTransportFactory instead.
+    transport->getConfiguration()->setMaxMessageSize(message_size);
+    transport->updateKnownMessageSize(-1);
+    transport->checkReadBytesAvailable(message_size);
+}
+
 std::shared_ptr<Apache::Hadoop::Hive::ThriftHiveMetastoreClient>
 HiveMetastoreClientFactory::createThriftHiveMetastoreClient(const String & name, const std::shared_ptr<CnchHiveSettings> & settings)
 {
@@ -268,13 +363,73 @@ HiveMetastoreClientFactory::createThriftHiveMetastoreClient(const String & name,
     socket->setRecvTimeout(hive_metastore_client_recv_timeout_ms);
     socket->setSendTimeout(hive_metastore_client_send_timeout_ms);
     std::shared_ptr<TTransport> transport = std::make_shared<TBufferedTransport>(socket);
+
+
     if (settings && settings->hive_metastore_client_kerberos_auth)
     {
-        String hadoop_kerberos_principal = fmt::format(
-            "{}/{}", settings->hive_metastore_client_principal.toString(), settings->hive_metastore_client_service_fqdn.toString());
-        kerberosInit(settings->hive_metastore_client_keytab_path, hadoop_kerberos_principal);
-        transport = TSaslClientTransport::wrapClientTransports(
-            settings->hive_metastore_client_service_fqdn, settings->hive_metastore_client_principal, transport);
+        /*if (settings->hive_metastore_client_auth_beike)
+        {
+            kerberosInit(settings->hive_metastore_client_keytab_path, settings->hive_metastore_client_principal);
+            transport = TSaslClientTransport::wrapClientTransports(
+                settings->hive_metastore_client_service_fqdn, settings->hive_metastore_client_service_name, transport);
+        }
+        else */
+        if (settings->hive_metastore_client_auth_beike)
+        {
+
+            std::shared_ptr<sasl::TSasl> sasl_client;
+            const map<string, string> props; // Empty; unused by thrift
+            const string auth_id; // Empty; unused by thrift
+
+            static const string KERBEROS_MECHANISM = "GSSAPI";
+
+            static vector<sasl_callback_t> KERB_INT_CALLBACKS;  // Internal kerberos connections
+
+            KERB_INT_CALLBACKS.resize(3);
+
+            KERB_INT_CALLBACKS[0].id = SASL_CB_LOG;
+            KERB_INT_CALLBACKS[0].proc = reinterpret_cast<int (*)()>(&SaslLogCallback);
+            //KERB_INT_CALLBACKS[0].context = ((void *)"Kerberos (internal)");
+            static string kerberos_in = "Kerberos (internal)";
+            KERB_INT_CALLBACKS[0].context = reinterpret_cast<void *>(kerberos_in.data());
+
+            KERB_INT_CALLBACKS[1].id = SASL_CB_PROXY_POLICY;
+            KERB_INT_CALLBACKS[1].proc = reinterpret_cast<int (*)()>(&SaslAuthorizeInternal);
+            KERB_INT_CALLBACKS[1].context = nullptr;
+
+            KERB_INT_CALLBACKS[2].id = SASL_CB_LIST_END;
+
+
+            // Since the daemons are never LDAP clients, we go straight to Kerberos
+            try {
+                //const string& service = settings->hive_metastore_client_service_name;
+                sasl_client.reset(new sasl::TSaslClient(
+                    KERBEROS_MECHANISM,
+                    auth_id,
+                    settings->hive_metastore_client_service_name,
+                    settings->hive_metastore_client_service_fqdn,
+                    props,
+                    KERB_INT_CALLBACKS.data()));
+            } catch (sasl::SaslClientImplException& e) {
+                LOG(ERROR) << "Failed to create a GSSAPI/SASL client: " << e.what();
+                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Failed to create a GSSAPI/SASL " ,name ,  e.what());
+            }
+
+            (&transport)->reset(new BeikeTSaslClientTransport(sasl_client, transport));
+
+            SetMaxMessageSize(transport.get());
+
+            LOG(INFO) << "Initiating client connection using principal ";
+
+        }
+        else
+        {
+            String hadoop_kerberos_principal = fmt::format(
+                "{}/{}", settings->hive_metastore_client_principal.toString(), settings->hive_metastore_client_service_fqdn.toString());
+            kerberosInit(settings->hive_metastore_client_keytab_path, hadoop_kerberos_principal);
+            transport = TSaslClientTransport::wrapClientTransports(
+                settings->hive_metastore_client_service_fqdn, settings->hive_metastore_client_principal, transport);
+        }
     }
     std::shared_ptr<TProtocol> protocol = std::make_shared<TBinaryProtocol>(transport);
     std::shared_ptr<ThriftHiveMetastoreClient> thrift_client = std::make_shared<ThriftHiveMetastoreClient>(protocol);
@@ -289,6 +444,9 @@ HiveMetastoreClientFactory::createThriftHiveMetastoreClient(const String & name,
 
     return thrift_client;
 }
+
+
+
 } // namespace DB
 
 #endif

@@ -32,7 +32,10 @@ namespace SaslCommon
 
 static const std::string KERBEROS_MECHANISM = "GSSAPI";
 static std::string GENERAL_CALLBACKS_CONTEXT_NAME = "General";
-static std::string KERBEROS_CALLBACKS_CONTEXT_NAME = "KerBeros";
+//static std::string KERBEROS_CALLBACKS_CONTEXT_NAME = "KerBeros";
+static std::string KERBEROS_CALLBACKS_CONTEXT_NAME = "Kerberos (internal)";
+
+
 
 static std::mutex sasl_mutex;
 static bool sasl_inited = false; 
