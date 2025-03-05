@@ -80,7 +80,7 @@ namespace SaslCommon
         return SASL_OK;
     }
 
-    /*static int saslUserCallbacks(void *, int, const char ** result, unsigned * len)
+    static int saslUserCallbacks(void *, int, const char ** result, unsigned * len)
     {
         // Setting the username to the empty string causes the remote end to use the
         // clients Kerberos principal, which is correct.
@@ -88,74 +88,21 @@ namespace SaslCommon
         if (len != nullptr)
             *len = 0;
         return SASL_OK;
-    }*/
-
-    static int SaslAuthorizeInternal(
-        sasl_conn_t *,
-        void *,
-        const char * requested_user,
-        unsigned rlen,
-        const char *,
-        unsigned,
-        const char *,
-        unsigned,
-        struct propctx *)
-    {
-        string requested_principal(requested_user, rlen);
-        vector<string> names;
-
-        split(names, requested_principal, is_any_of("/@"));
-
-        if (names.size() != 3)
-        {
-            LOG(INFO) << "Kerberos principal should be of the form: "
-                      << "<service>/<hostname>@<realm> - got: " << requested_user;
-            return SASL_BADAUTH;
-        }
-        /*SecureAuthProvider* internal_auth_provider;
-        if (context == NULL) {
-            internal_auth_provider = static_cast<SecureAuthProvider*>(
-                AuthManager::GetInstance()->GetInternalAuthProvider());
-        } else {
-            // Branch should only be taken for testing, where context is used to inject an auth
-            // provider.
-            internal_auth_provider = static_cast<SecureAuthProvider*>(context);
-        }*/
-
-        vector<string> whitelist;
-        split(whitelist, "hdfs,bigdata", is_any_of(","));
-        //whitelist.push_back(internal_auth_provider->service_name());
-        for (string & s : whitelist)
-        {
-            trim(s);
-            if (s.empty())
-                continue;
-            if (names[0] == s)
-            {
-                // We say "principal" here becase this is for internal communication, and hence
-                // ought always be --principal or --be_principal
-                LOG(INFO) << "Successfully authenticated principal \"" << requested_principal << "\" on an internal connection";
-                return SASL_OK;
-            }
-        }
-        LOG(INFO) << "Principal \"" << requested_principal << "\" not authenticated. "
-                  << "Reason: 'service' does not match from <service>/<hostname>@<realm>.\n";
-        return SASL_BADAUTH;
     }
 
-    /*static void setupGeneralCallbacks()
+    static void setupGeneralCallbacks()
     {   
         GENERAL_CALLBACKS.resize(2);
 
         GENERAL_CALLBACKS[0].id = SASL_CB_LOG;
         GENERAL_CALLBACKS[0].proc = reinterpret_cast<int (*)()>(&saslLogCallbacks);
-        GENERAL_CALLBACKS[0].context = reinterpret_castcontext = <void *>(GENERAL_CALLBACKS_CONTEXT_NAME.data());
+        GENERAL_CALLBACKS[0].context = reinterpret_cast<void *>(GENERAL_CALLBACKS_CONTEXT_NAME.data());
 
         GENERAL_CALLBACKS[1].id = SASL_CB_LIST_END;
         GENERAL_CALLBACKS[1].proc = nullptr;
         GENERAL_CALLBACKS[1].context = nullptr;
 
-    }*/
+    }
 
     static void setupKerberosCallbacks()
     {
@@ -165,12 +112,8 @@ namespace SaslCommon
         KERBEROS_CALLBACKS[0].proc = reinterpret_cast<int (*)()>(&saslLogCallbacks);
         KERBEROS_CALLBACKS[0].context = reinterpret_cast<void *>(KERBEROS_CALLBACKS_CONTEXT_NAME.data());
 
-        /*KERBEROS_CALLBACKS[1].id = SASL_CB_USER;
+        KERBEROS_CALLBACKS[1].id = SASL_CB_USER;
         KERBEROS_CALLBACKS[1].proc = reinterpret_cast<int (*)()>(&saslUserCallbacks);
-        KERBEROS_CALLBACKS[1].context = nullptr;*/
-
-        KERBEROS_CALLBACKS[1].id = SASL_CB_PROXY_POLICY;
-        KERBEROS_CALLBACKS[1].proc = reinterpret_cast<int (*)()>(&SaslAuthorizeInternal);
         KERBEROS_CALLBACKS[1].context = nullptr;
 
         KERBEROS_CALLBACKS[2].id = SASL_CB_LIST_END;
@@ -378,7 +321,7 @@ bool SaslClient::hasInitialResponse()
 void SaslClient::setupSaslClientWithKerberos()
 {
     std::lock_guard lck(SaslCommon::sasl_mutex);
-    //SaslCommon::setupGeneralCallbacks();
+    SaslCommon::setupGeneralCallbacks();
     SaslCommon::setupKerberosCallbacks();
 
     SaslClient::saslInit(SaslCommon::GENERAL_CALLBACKS.data());

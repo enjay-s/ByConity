@@ -367,60 +367,53 @@ HiveMetastoreClientFactory::createThriftHiveMetastoreClient(const String & name,
 
     if (settings && settings->hive_metastore_client_kerberos_auth)
     {
-        /*if (settings->hive_metastore_client_auth_beike)
-        {
-            kerberosInit(settings->hive_metastore_client_keytab_path, settings->hive_metastore_client_principal);
-            transport = TSaslClientTransport::wrapClientTransports(
-                settings->hive_metastore_client_service_fqdn, settings->hive_metastore_client_service_name, transport);
-        }
-        else */
         if (settings->hive_metastore_client_auth_beike)
         {
+            kerberosInit(settings->hive_metastore_client_keytab_path, settings->hive_metastore_client_principal);
+            if (settings->hive_metastore_client_auth_method)
+            {
+                std::shared_ptr<sasl::TSasl> sasl_client;
+                const map<string, string> props; // Empty; unused by thrift
+                const string auth_id; // Empty; unused by thrift
 
-            std::shared_ptr<sasl::TSasl> sasl_client;
-            const map<string, string> props; // Empty; unused by thrift
-            const string auth_id; // Empty; unused by thrift
+                static const string KERBEROS_MECHANISM = "GSSAPI";
+                static vector<sasl_callback_t> KERB_INT_CALLBACKS; // Internal kerberos connections
 
-            static const string KERBEROS_MECHANISM = "GSSAPI";
+                KERB_INT_CALLBACKS.resize(3);
 
-            static vector<sasl_callback_t> KERB_INT_CALLBACKS;  // Internal kerberos connections
+                KERB_INT_CALLBACKS[0].id = SASL_CB_LOG;
+                KERB_INT_CALLBACKS[0].proc = reinterpret_cast<int (*)()>(&SaslLogCallback);
+                static string kerberos_in = "Kerberos (internal)";
+                KERB_INT_CALLBACKS[0].context = reinterpret_cast<void *>(kerberos_in.data());
 
-            KERB_INT_CALLBACKS.resize(3);
-
-            KERB_INT_CALLBACKS[0].id = SASL_CB_LOG;
-            KERB_INT_CALLBACKS[0].proc = reinterpret_cast<int (*)()>(&SaslLogCallback);
-            //KERB_INT_CALLBACKS[0].context = ((void *)"Kerberos (internal)");
-            static string kerberos_in = "Kerberos (internal)";
-            KERB_INT_CALLBACKS[0].context = reinterpret_cast<void *>(kerberos_in.data());
-
-            KERB_INT_CALLBACKS[1].id = SASL_CB_PROXY_POLICY;
-            KERB_INT_CALLBACKS[1].proc = reinterpret_cast<int (*)()>(&SaslAuthorizeInternal);
-            KERB_INT_CALLBACKS[1].context = nullptr;
-
-            KERB_INT_CALLBACKS[2].id = SASL_CB_LIST_END;
-
-
-            // Since the daemons are never LDAP clients, we go straight to Kerberos
-            try {
-                //const string& service = settings->hive_metastore_client_service_name;
-                sasl_client.reset(new sasl::TSaslClient(
-                    KERBEROS_MECHANISM,
-                    auth_id,
-                    settings->hive_metastore_client_service_name,
-                    settings->hive_metastore_client_service_fqdn,
-                    props,
-                    KERB_INT_CALLBACKS.data()));
-            } catch (sasl::SaslClientImplException& e) {
-                LOG(ERROR) << "Failed to create a GSSAPI/SASL client: " << e.what();
-                throw Exception(ErrorCodes::BAD_ARGUMENTS, "Failed to create a GSSAPI/SASL " ,name ,  e.what());
+                KERB_INT_CALLBACKS[1].id = SASL_CB_PROXY_POLICY;
+                KERB_INT_CALLBACKS[1].proc = reinterpret_cast<int (*)()>(&SaslAuthorizeInternal);
+                KERB_INT_CALLBACKS[1].context = nullptr;
+                KERB_INT_CALLBACKS[2].id = SASL_CB_LIST_END;
+                try
+                {
+                    sasl_client.reset(new sasl::TSaslClient(
+                        KERBEROS_MECHANISM,
+                        auth_id,
+                        settings->hive_metastore_client_service_name,
+                        settings->hive_metastore_client_service_fqdn,
+                        props,
+                        KERB_INT_CALLBACKS.data()));
+                }
+                catch (sasl::SaslClientImplException & e)
+                {
+                    LOG(ERROR) << "Failed to create a GSSAPI/SASL client: " << e.what();
+                    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Failed to create a GSSAPI/SASL ", name, e.what());
+                }
+                (&transport)->reset(new BeikeTSaslClientTransport(sasl_client, transport));
+                SetMaxMessageSize(transport.get());
+                LOG(INFO) << "Initiating client connection using principal ";
             }
-
-            (&transport)->reset(new BeikeTSaslClientTransport(sasl_client, transport));
-
-            SetMaxMessageSize(transport.get());
-
-            LOG(INFO) << "Initiating client connection using principal ";
-
+            else
+            {
+                transport = TSaslClientTransport::wrapClientTransports(
+                    settings->hive_metastore_client_service_fqdn, settings->hive_metastore_client_service_name, transport);
+            }
         }
         else
         {

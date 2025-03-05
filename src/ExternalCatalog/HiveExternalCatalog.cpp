@@ -187,6 +187,7 @@ SettingsChanges getSettingsChangesFromConfigs(PlainConfigsPtr configs)
         {"hive_metastore_client_keytab_path","hive_metastore_client_keytab_path"},
         {"hive_metastore_client_principal","hive_metastore_client_principal"},
         {"hive_metastore_client_service_name","hive_metastore_client_service_name"},
+        {"hive_metastore_client_auth_method","hive_metastore_client_auth_method"},
     };
 
     SettingsChanges changes;

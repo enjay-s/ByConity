@@ -254,4 +254,3 @@ uint8_t * TSaslServer::evaluateChallengeOrResponse(const uint8_t * response, con
     return out;
 }*/
 };
-
